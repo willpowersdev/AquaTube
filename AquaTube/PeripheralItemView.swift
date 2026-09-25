@@ -11,6 +11,7 @@ import CoreBluetooth
 struct PeripheralItemView: View {
     @ObservedObject var manager: BluetoothManager
     var peripheral: CBPeripheral
+    var isConnecting: Bool = false
 
     var body: some View {
         HStack(alignment: .center) {
@@ -23,7 +24,16 @@ struct PeripheralItemView: View {
                 Text("\(peripheral.identifier)")
                     .font(.custom("Helvetica", fixedSize: 12))
             }
+            Spacer()
+            if isConnecting {
+                ProgressView()
+            } else {
+                Image(systemName: "chevron.right")
+                    .foregroundColor(.secondary)
+            }
         }
+        // Make the whole row tappable, not just the text
+        .contentShape(Rectangle())
         .listRowSeparator(.hidden)
         .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
     }
