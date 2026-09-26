@@ -208,6 +208,8 @@ final class BluetoothManager: NSObject, ObservableObject, CBCentralManagerDelega
         case off = 0
         case firelight = 1
         case storms = 2
+        case christmas = 3
+        case fourthOfJuly = 4
         case defaultColor = 5
     }
 

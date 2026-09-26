@@ -124,6 +124,8 @@ struct ColorSwatch: Identifiable, Equatable {
 enum LightRoutine: String, CaseIterable, Identifiable {
     case firelight = "Firelight"
     case storms = "Storms"
+    case christmas = "Christmas"
+    case fourthOfJuly = "4th of July"
 
     var id: String { rawValue }
     var name: String { rawValue }
@@ -132,13 +134,17 @@ enum LightRoutine: String, CaseIterable, Identifiable {
         switch self {
         case .firelight: return .firelight
         case .storms: return .storms
+        case .christmas: return .christmas
+        case .fourthOfJuly: return .fourthOfJuly
         }
     }
 
     var summary: String {
         switch self {
-        case .firelight: return "Flickering torch light in reds and oranges"
+        case .firelight: return "Flickering flames in reds, oranges and yellows"
         case .storms: return "Moonlight broken by blue and white lightning"
+        case .christmas: return "Red, gold and green with twinkling sparkles"
+        case .fourthOfJuly: return "Red, white and blue, then a fireworks show"
         }
     }
 
@@ -146,6 +152,8 @@ enum LightRoutine: String, CaseIterable, Identifiable {
         switch self {
         case .firelight: return "flame.fill"
         case .storms: return "cloud.bolt.fill"
+        case .christmas: return "tree.fill"
+        case .fourthOfJuly: return "sparkles"
         }
     }
 
@@ -153,6 +161,8 @@ enum LightRoutine: String, CaseIterable, Identifiable {
         switch self {
         case .firelight: return .orange
         case .storms: return Color(.sRGB, red: 0.55, green: 0.7, blue: 1.0)
+        case .christmas: return Color(.sRGB, red: 1.0, green: 0.78, blue: 0.2)
+        case .fourthOfJuly: return Color(.sRGB, red: 0.4, green: 0.55, blue: 1.0)
         }
     }
 
@@ -161,27 +171,71 @@ enum LightRoutine: String, CaseIterable, Identifiable {
         switch self {
         case .firelight: return FirelightPreview.gradient
         case .storms: return StormsPreview.gradient
+        case .christmas: return ChristmasPreview.gradient
+        case .fourthOfJuly: return FourthOfJulyPreview.gradient
         }
     }
 }
 
-/// Mirrors setFireColor() in AquaTube.ino so the preview matches the device
+/// Runs the same heat simulation as updateFirelight() in AquaTube.ino
+/// (adapted from Electriangle/Fire_Main) and samples the blended color over
+/// time, so the preview shows the course the LED actually takes
 enum FirelightPreview {
-    static func color(heat: Double, brightness: Double) -> Color {
-        let red = 255 * brightness
-        let green = (18 + heat * 112) * brightness * brightness
-        return Color(.sRGB, red: red / 255, green: green / 255, blue: 0)
+    private static let cells = 50
+    private static let flameHeight = 50
+    private static let sparks = 100
+
+    /// Small seeded generator so the preview looks the same on every launch
+    private struct SeededRandom {
+        var state: UInt64
+        mutating func next(_ lower: Int, _ upper: Int) -> Int {
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return lower + Int((state >> 33) % UInt64(upper - lower))
+        }
     }
 
-    // (heat, brightness) samples covering normal flicker, a flare and a gutter
-    private static let samples: [(Double, Double)] = [
-        (0.50, 0.80), (0.35, 0.70), (0.60, 0.88), (0.45, 0.75),
-        (0.95, 0.98), (0.70, 0.90), (0.40, 0.72), (0.10, 0.35),
-        (0.25, 0.55), (0.55, 0.85), (0.35, 0.65), (0.88, 0.96),
-        (0.50, 0.80),
-    ]
+    /// Fire_Main's setPixelHeatColor()
+    private static func heatColor(_ temperature: Int) -> (Int, Int, Int) {
+        let t192 = Int((Double(temperature) / 255 * 191).rounded())
+        let heatramp = (t192 & 0x3F) << 2
+        if t192 > 0x80 { return (255, 255, heatramp) }
+        if t192 > 0x40 { return (255, heatramp, 0) }
+        return (heatramp, 0, 0)
+    }
 
-    static let gradient = Gradient(colors: samples.map { color(heat: $0.0, brightness: $0.1) })
+    static let gradient: Gradient = {
+        var random = SeededRandom(state: 7)
+        var heat = [Int](repeating: 0, count: cells)
+        var colors: [Color] = []
+
+        // Let the fire build for a second, then sample every 60ms for ~1.5s
+        for frame in 0..<250 {
+            for i in 0..<cells {
+                heat[i] = max(0, heat[i] - random.next(0, (flameHeight * 10) / cells + 2))
+            }
+            for k in stride(from: cells - 1, through: 2, by: -1) {
+                heat[k] = (heat[k - 1] + heat[k - 2] + heat[k - 2]) / 3
+            }
+            if random.next(0, 255) < sparks {
+                let y = random.next(0, 7)
+                heat[y] = min(255, heat[y] + random.next(160, 255))
+            }
+
+            guard frame >= 100, frame % 6 == 0 else { continue }
+            var red = 0, green = 0, blue = 0
+            for temperature in heat {
+                let rgb = heatColor(temperature)
+                red += rgb.0
+                green += rgb.1
+                blue += rgb.2
+            }
+            colors.append(Color(.sRGB,
+                                red: Double(red / cells) / 255,
+                                green: Double(green / cells) / 255,
+                                blue: Double(blue / cells) / 255))
+        }
+        return Gradient(colors: colors)
+    }()
 }
 
 /// Mirrors the Storms colors in AquaTube.ino: long stretches of moonlight
@@ -226,6 +280,102 @@ enum StormsPreview {
         .init(color: moonlight.color, location: 0.80),
         .init(color: moonlight.color, location: 1.00),
     ])
+}
+
+/// Mirrors the Christmas colors and timings in AquaTube.ino: one full cycle
+/// of holds and crossfades, with a sparkle during each hold
+enum ChristmasPreview {
+    private static let colors: [(Double, Double, Double)] = [
+        (255, 0, 0),     // red
+        (255, 140, 0),   // gold
+        (0, 255, 20),    // green
+        (255, 140, 0),   // gold
+    ]
+    private static let sparkle = (255.0, 200.0, 80.0)
+    private static let holdSeconds = 2.5
+    private static let fadeSeconds = 1.5
+
+    private static func color(_ rgb: (Double, Double, Double)) -> Color {
+        Color(.sRGB, red: rgb.0 / 255, green: rgb.1 / 255, blue: rgb.2 / 255)
+    }
+
+    static let gradient: Gradient = {
+        let segment = holdSeconds + fadeSeconds
+        let cycle = segment * Double(colors.count)
+        var stops: [Gradient.Stop] = []
+
+        for (index, rgb) in colors.enumerated() {
+            let start = Double(index) * segment / cycle
+            let holdEnd = start + holdSeconds / cycle
+            // Sparkle partway through the hold
+            let sparkleAt = start + holdSeconds * 0.45 / cycle
+            stops.append(.init(color: color(rgb), location: start))
+            stops.append(.init(color: color(rgb), location: sparkleAt - 0.004))
+            stops.append(.init(color: color(sparkle), location: sparkleAt))
+            stops.append(.init(color: color(rgb), location: sparkleAt + 0.025))
+            stops.append(.init(color: color(rgb), location: holdEnd))
+        }
+        // The last fade returns to the first color
+        stops.append(.init(color: color(colors[0]), location: 1))
+        return Gradient(stops: stops)
+    }()
+}
+
+/// Mirrors the 4th of July colors and timings in AquaTube.ino: the red,
+/// white and blue crossfades, then a fireworks show ending in a finale
+enum FourthOfJulyPreview {
+    private typealias RGB = (Double, Double, Double)
+    private static let night: RGB = (2, 2, 8)
+    private static let red: RGB = (255, 0, 0)
+    private static let white: RGB = (255, 255, 255)
+    private static let blue: RGB = (0, 40, 255)
+    private static let launchGlow: RGB = (255, 120, 30)
+
+    private static func mix(_ a: RGB, _ b: RGB, _ t: Double) -> RGB {
+        (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, a.2 + (b.2 - a.2) * t)
+    }
+
+    static let gradient: Gradient = {
+        // (seconds, color) points along one full loop
+        var points: [(Double, RGB)] = [
+            (0, night), (1, red), (3, red), (4, white), (6, white), (7, blue), (9, blue), (10, night),
+        ]
+        var time = 10.3
+
+        func firework(_ color: RGB, launch: Double, fade: Double, endLevel: Double, gap: Double) {
+            points.append((time, points.last?.1 ?? night))
+            time += launch
+            points.append((time, mix(night, launchGlow, 0.25)))
+            points.append((time + 0.01, color))
+            time += 0.07
+            points.append((time, color))
+            time += fade * 0.5
+            // A crackle as the burst dies
+            let fading = mix(night, color, 0.45)
+            points.append((time, fading))
+            points.append((time + 0.03, mix(fading, white, 0.5)))
+            points.append((time + 0.06, fading))
+            time += fade * 0.5
+            points.append((time, mix(night, color, endLevel)))
+            time += gap
+        }
+
+        // The show
+        for color in [red, white, blue, red, white] {
+            firework(color, launch: 0.6, fade: 1.0, endLevel: 0, gap: 0.6)
+        }
+        // The finale: rockets go up before the last burst has faded
+        for color in [blue, red, white, blue, red] {
+            firework(color, launch: 0.2, fade: 0.45, endLevel: 0.35, gap: 0)
+        }
+        time += 0.6
+        points.append((time, night))
+
+        return Gradient(stops: points.map { point in
+            .init(color: Color(.sRGB, red: point.1.0 / 255, green: point.1.1 / 255, blue: point.1.2 / 255),
+                  location: point.0 / time)
+        })
+    }()
 }
 
 struct RoutineRow: View {
